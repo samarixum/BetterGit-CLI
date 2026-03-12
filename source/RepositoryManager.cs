@@ -40,6 +40,28 @@ public partial class RepositoryManager {
         _versionService.SetChannel(channel);
     }
 
+    public string GetDiffSummary() {
+        if (!IsValidGitRepo()) return "Not a git repository.";
+
+        using (Repository repo = new Repository(_repoPath)) {
+            // Compare HEAD tree to working directory to get the actual patch/diff
+            var patch = repo.Diff.Compare<Patch>(repo.Head.Tip.Tree, DiffTargets.WorkingDirectory);
+
+            if (patch == null || !patch.Any()) {
+                return "No changes detected.";
+            }
+
+            string diffContent = patch.Content;
+
+            // Protect the AI's context window from massive diffs
+            if (diffContent.Length > 20000) {
+                diffContent = diffContent.Substring(0, 20000) + "\n... [Diff truncated due to size]";
+            }
+
+            return diffContent;
+        }
+    }
+
     public string GetVersionInfo() {
         var v = _versionService.GetCurrentVersion();
         string current = $"{v.Major}.{v.Minor}.{v.Patch}";
@@ -51,12 +73,12 @@ public partial class RepositoryManager {
             using (Repository repo = new Repository(_repoPath)) {
                 var tip = repo.Head.Tip;
                 if (tip != null) {
-                     last = ExtractVersion(tip.Message);
-                     if (string.IsNullOrEmpty(last) || last == "v?") last = "None";
+                    last = ExtractVersion(tip.Message);
+                    if (string.IsNullOrEmpty(last) || last == "v?") last = "None";
                 }
             }
         }
-        
+
         return JsonConvert.SerializeObject(new { currentVersion = current, lastCommitVersion = last });
     }
 

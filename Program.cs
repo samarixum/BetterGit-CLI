@@ -100,6 +100,11 @@ class Program {
                     manager.Restore(args[1]);
                     break;
 
+                case "diff":
+                    // usage: BetterGit.exe diff [--path <root>]
+                    Console.WriteLine(manager.GetDiffSummary());
+                    break;
+
                 case "get-tree-data":
                     // usage: BetterGit.exe get-tree-data
                     // Outputs JSON for VS Code to read
