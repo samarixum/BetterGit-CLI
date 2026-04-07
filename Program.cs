@@ -147,9 +147,10 @@ class Program {
                 case "remote":
                     // usage:
                     //   BetterGit.exe remote list [--json]
+                    //   BetterGit.exe remote add <name> <url> [--group <g>] [--provider <p>] [--public|--private]
                     //   BetterGit.exe remote set-meta <name> [--group <g>] [--provider <p>] [--public|--private]
                     if (args.Length < 2) {
-                        throw new Exception("Remote subcommand required (list, set-meta).");
+                        throw new Exception("Remote subcommand required (list, add, set-meta).");
                     }
 
                     string sub = args[1].ToLowerInvariant();
@@ -166,6 +167,43 @@ class Program {
                                 Console.WriteLine($"{r.Name} [{status}] ({r.Provider}) ({r.Group}) ({pub}) -> {url}");
                             }
                         }
+                        break;
+                    }
+
+                    if (sub == "add") {
+                        if (args.Length < 4) {
+                            throw new Exception("Remote name and URL required. Usage: BetterGit.exe remote add <name> <url> [--group <g>] [--provider <p>] [--public|--private]");
+                        }
+
+                        string remoteName = args[2];
+                        string url = args[3];
+                        string? group = null;
+                        string? provider = null;
+                        bool? isPublic = null;
+
+                        for (int i = 4; i < args.Length; i++) {
+                            if (args[i].Equals("--group", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length) {
+                                group = args[i + 1];
+                                i++;
+                                continue;
+                            }
+                            if (args[i].Equals("--provider", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length) {
+                                provider = args[i + 1];
+                                i++;
+                                continue;
+                            }
+                            if (args[i].Equals("--public", StringComparison.OrdinalIgnoreCase)) {
+                                isPublic = true;
+                                continue;
+                            }
+                            if (args[i].Equals("--private", StringComparison.OrdinalIgnoreCase)) {
+                                isPublic = false;
+                                continue;
+                            }
+                        }
+
+                        manager.AddRemote(remoteName, url, group, provider, isPublic);
+                        Console.WriteLine($"Added remote: {remoteName} -> {url}");
                         break;
                     }
 
@@ -265,6 +303,7 @@ class Program {
         Console.WriteLine("  cat-file <sha> <path>  Print file content");
         Console.WriteLine("  publish [--group <g>] [--public|--private]  Push current branch");
         Console.WriteLine("  remote list [--json]   List Git remotes + metadata");
+        Console.WriteLine("  remote add <name> <url> [--group <g>] [--provider <p>] [--public|--private]  Add a Git remote and metadata");
         Console.WriteLine("  remote set-meta <name> [--group <g>] [--provider <p>] [--public|--private]  Update metadata");
         Console.WriteLine("  -h, --help             Show this help message");
     }
