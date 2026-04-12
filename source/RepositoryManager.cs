@@ -29,7 +29,11 @@ public partial class RepositoryManager {
     }
 
     public static void InitProject(string path, bool isNode = false) {
-        ProjectInitService.InitProject(path, isNode);
+        ProjectInitService.InitProject(path, new WebProjectOptions { IsNodeProject = isNode });
+    }
+
+    public static void InitProject(string path, WebProjectOptions webProject) {
+        ProjectInitService.InitProject(path, webProject);
     }
 
     public static void AddSafeDirectory(string path) {

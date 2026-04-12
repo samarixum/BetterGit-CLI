@@ -8,10 +8,23 @@ using Tomlyn.Model;
 
 namespace BetterGit;
 
+/// <summary>
+/// Creates a new Git repository and initializes BetterGit configuration files.
+/// </summary>
 public class ProjectInitService {
     /* :: :: Public API :: START :: */
 
+    /// <summary>
+    /// Initializes a repository at the specified path and seeds BetterGit TOML metadata.
+    /// </summary>
     public static void InitProject(string path, bool isNode = false) {
+        InitProject(path, new WebProjectOptions { IsNodeProject = isNode });
+    }
+
+    /// <summary>
+    /// Initializes a repository at the specified path and seeds BetterGit TOML metadata.
+    /// </summary>
+    public static void InitProject(string path, WebProjectOptions webProject) {
         // 1. Create Directory if it doesn't exist
         if (!Directory.Exists(path)) {
             Directory.CreateDirectory(path);
@@ -29,36 +42,53 @@ public class ProjectInitService {
             }
         }
 
-        // 3. Handle Node.js package.json & Determine Initial Version
-        // If --node flag is passed OR package.json already exists
-        string packageJsonPath = Path.Combine(path, "package.json");
-        long major = 0, minor = 0, patch = 0;
-        bool isNodeProject = isNode;
+        // 3. Handle web project metadata & determine the initial version.
+        WebProjectOptions requestedProject = webProject ?? new WebProjectOptions();
+        WebProjectOptions detectedProject = WebProjectSupport.Detect(path);
+        WebProjectOptions effectiveProject = WebProjectSupport.Merge(requestedProject, detectedProject);
 
-        if (File.Exists(packageJsonPath)) {
-            // Read existing version to sync project.toml, but DO NOT modify package.json
-            try {
-                string content = File.ReadAllText(packageJsonPath);
-                JObject? json = JsonConvert.DeserializeObject<JObject>(content);
-                JToken? versionToken = json?["version"];
-                if (versionToken != null) {
-                    string v = versionToken.ToString();
-                    string[] parts = v.Split('.');
-                    if (parts.Length >= 1) long.TryParse(parts[0], out major);
-                    if (parts.Length >= 2) long.TryParse(parts[1], out minor);
-                    if (parts.Length >= 3) long.TryParse(parts[2], out patch);
-                }
-            } catch { /* Ignore corrupt package.json */ }
-            isNodeProject = true;
-        } else if (isNode) {
-            // Create new package.json
+        string packageJsonPath = WebProjectSupport.GetPackageJsonPath(path);
+        string denoConfigPath = WebProjectSupport.GetPreferredDenoConfigPath(path);
+        long major = 0, minor = 0, patch = 0;
+        bool isAlpha = false, isBeta = false;
+
+        // Read the highest version from any existing web project config file.
+        bool hasSeedVersion = false;
+        foreach (string configPath in WebProjectSupport.GetExistingConfigPaths(path)) {
+            if (!WebProjectSupport.TryReadVersion(configPath, out long candidateMajor, out long candidateMinor, out long candidatePatch, out bool candidateAlpha, out bool candidateBeta)) {
+                continue;
+            }
+
+            if (!hasSeedVersion || IsHigherVersion(candidateMajor, candidateMinor, candidatePatch, major, minor, patch)) {
+                major = candidateMajor;
+                minor = candidateMinor;
+                patch = candidatePatch;
+                isAlpha = candidateAlpha;
+                isBeta = candidateBeta;
+                hasSeedVersion = true;
+            }
+        }
+
+        string seedVersion = BuildVersionString(major, minor, patch, isAlpha, isBeta);
+
+        if (effectiveProject.IsNodeProject && !File.Exists(packageJsonPath)) {
+            // Create a package.json when Node support is enabled but the file does not exist yet.
             JObject pkg = new JObject {
                 ["name"] = new DirectoryInfo(path).Name.ToLower().Replace(" ", "-"),
-                ["version"] = "0.0.0",
+                ["version"] = seedVersion,
                 ["description"] = "Initialized by BetterGit"
             };
             File.WriteAllText(packageJsonPath, JsonConvert.SerializeObject(value: pkg, formatting: Formatting.Indented));
-            isNodeProject = true;
+        }
+
+        if (effectiveProject.IsDenoProject && !File.Exists(denoConfigPath)) {
+            // Deno accepts JSONC, so we create a comment-friendly config file when one is missing.
+            string denoTemplate =
+                "// Initialized by BetterGit\n" +
+                "{\n" +
+                $"    \"version\": \"{seedVersion}\"\n" +
+                "}\n";
+            File.WriteAllText(denoConfigPath, denoTemplate);
         }
 
         // 4. Create the BetterGit config folder + TOML files.
@@ -71,11 +101,12 @@ public class ProjectInitService {
                 ["major"] = major,
                 ["minor"] = minor,
                 ["patch"] = patch,
-                ["isAlpha"] = false,
-                ["isBeta"] = false,
-                ["isNodeProject"] = isNodeProject
+                ["isAlpha"] = isAlpha,
+                ["isBeta"] = isBeta,
+                ["isNodeProject"] = effectiveProject.IsNodeProject,
+                ["isDenoProject"] = effectiveProject.IsDenoProject
             };
-            File.WriteAllText(projectFile, Toml.FromModel(toml));
+            File.WriteAllText(projectFile, TomlSupport.WriteTable(toml));
         }
 
         // Local-only settings and credentials should never be committed.
@@ -99,9 +130,9 @@ public class ProjectInitService {
         string ignoreFile = Path.Combine(path, ".gitignore");
         if (!File.Exists(ignoreFile)) {
             // Ignore the .vs folder, bin/obj, and the archive branches metadata if you ever store it in files
-            // Also ignore node_modules if node
+            // Also ignore node_modules if Node support is enabled.
             string ignores = "bin/\nobj/\n.vscode/\n";
-            if (isNodeProject) {
+            if (effectiveProject.IsNodeProject) {
                 ignores += "node_modules/\n";
             }
 
@@ -117,6 +148,37 @@ public class ProjectInitService {
     }
 
     /* :: :: Public API :: END :: */
+
+    private static bool IsHigherVersion(long candidateMajor, long candidateMinor, long candidatePatch, long currentMajor, long currentMinor, long currentPatch) {
+        if (candidateMajor > currentMajor) {
+            return true;
+        }
+
+        if (candidateMajor < currentMajor) {
+            return false;
+        }
+
+        if (candidateMinor > currentMinor) {
+            return true;
+        }
+
+        if (candidateMinor < currentMinor) {
+            return false;
+        }
+
+        return candidatePatch > currentPatch;
+    }
+
+    private static string BuildVersionString(long major, long minor, long patch, bool isAlpha, bool isBeta) {
+        string version = $"{major}.{minor}.{patch}";
+        if (isAlpha) {
+            version += "-A";
+        } else if (isBeta) {
+            version += "-B";
+        }
+
+        return version;
+    }
 
     private static void EnsureGitignoreRules(string gitignorePath, IReadOnlyList<string> rules) {
         string content;

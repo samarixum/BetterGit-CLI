@@ -46,11 +46,19 @@ public partial class RepositoryManager {
 
                 string localBranchName = repo.Info.IsHeadDetached ? "HEAD" : repo.Head.FriendlyName;
                 string remoteBranchName = string.IsNullOrWhiteSpace(remote.Branch) ? localBranchName : remote.Branch;
+                bool forcePush = !string.IsNullOrWhiteSpace(remote.Branch);
                 string pushSpec = remoteBranchName.Equals(localBranchName, StringComparison.OrdinalIgnoreCase)
                     ? localBranchName
                     : $"{localBranchName}:{remoteBranchName}";
 
-                ProcessStartInfo processInfo = new ProcessStartInfo(fileName: "git", arguments: $"push {remote.Name} {pushSpec}") {
+                List<string> arguments = new List<string> { "push" };
+                if (forcePush) {
+                    arguments.Add("--force");
+                }
+                arguments.Add(remote.Name);
+                arguments.Add(pushSpec);
+
+                ProcessStartInfo processInfo = new ProcessStartInfo(fileName: "git") {
                     WorkingDirectory = _repoPath,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -58,22 +66,33 @@ public partial class RepositoryManager {
                     CreateNoWindow = true
                 };
 
+                foreach (string argument in arguments) {
+                    processInfo.ArgumentList.Add(argument);
+                }
+
                 Process? process = Process.Start(processInfo);
                 if (process != null) {
                     using (process) {
-                        process.WaitForExit();
+                        process.OutputDataReceived += (_, eventArgs) => {
+                            if (!string.IsNullOrWhiteSpace(eventArgs.Data)) {
+                                Console.WriteLine(eventArgs.Data);
+                            }
+                        };
 
-                        string output = process.StandardOutput.ReadToEnd();
-                        string error = process.StandardError.ReadToEnd();
+                        process.ErrorDataReceived += (_, eventArgs) => {
+                            if (!string.IsNullOrWhiteSpace(eventArgs.Data)) {
+                                Console.Error.WriteLine(eventArgs.Data);
+                            }
+                        };
+
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+                        process.WaitForExit();
 
                         if (process.ExitCode == 0) {
                             Console.WriteLine($"Successfully published to {remote.Name}.");
-                            if (!string.IsNullOrWhiteSpace(output)) {
-                                Console.WriteLine(output);
-                            }
                         } else {
                             Console.Error.WriteLine($"Failed to publish to {remote.Name}.");
-                            Console.Error.WriteLine(error);
                         }
                     }
                 }

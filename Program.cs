@@ -44,17 +44,23 @@ class Program {
                     // If no path provided, use current directory
                     string targetPath = Directory.GetCurrentDirectory();
                     bool isNode = false;
+                    bool isDeno = false;
 
                     // Simple arg parsing
                     foreach (string arg in args.Skip(1)) {
                         if (arg.Equals("--node", StringComparison.OrdinalIgnoreCase)) {
                             isNode = true;
+                        } else if (arg.Equals("--deno", StringComparison.OrdinalIgnoreCase)) {
+                            isDeno = true;
                         } else if (!arg.StartsWith("-")) {
                             targetPath = arg;
                         }
                     }
 
-                    RepositoryManager.InitProject(targetPath, isNode);
+                    RepositoryManager.InitProject(targetPath, new WebProjectOptions {
+                        IsNodeProject = isNode,
+                        IsDenoProject = isDeno
+                    });
                     break;
 
                 case "save":
@@ -306,7 +312,7 @@ class Program {
         Console.WriteLine("Usage: BetterGit <command> [arguments]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
-        Console.WriteLine("  init [path] [--node]   Initialize a new project");
+        Console.WriteLine("  init [path] [--node] [--deno]   Initialize a new project");
         Console.WriteLine("  save <message>         Save changes (commit)");
         Console.WriteLine("  undo                   Undo the last save");
         Console.WriteLine("  redo                   Redo the last undo");

@@ -1,13 +1,11 @@
-using System.Text.RegularExpressions;
-
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-
 using Tomlyn;
 using Tomlyn.Model;
 
 namespace BetterGit;
 
+/// <summary>
+/// Reads and updates version metadata stored in BetterGit TOML files.
+/// </summary>
 public class VersionService : IVersionService {
     private readonly string _repoPath;
 
@@ -22,11 +20,11 @@ public class VersionService : IVersionService {
     /* :: :: Methods :: START :: */
 
     public (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta) GetCurrentVersion() {
-        (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, bool IsNodeProject) state = ReadCurrentVersionState();
+        (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, WebProjectOptions WebProject) state = ReadCurrentVersionState();
         return (state.Major, state.Minor, state.Patch, state.IsAlpha, state.IsBeta);
     }
 
-    private (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, bool IsNodeProject) ReadCurrentVersionState() {
+    private (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, WebProjectOptions WebProject) ReadCurrentVersionState() {
         BetterGitConfigPaths.MigrateMetaTomlToProjectTomlIfNeeded(_repoPath);
 
         string projectFile = BetterGitConfigPaths.GetProjectTomlPath(_repoPath);
@@ -34,7 +32,7 @@ public class VersionService : IVersionService {
         long major = 0, minor = 0, patch = 0;
         bool isAlpha = false;
         bool isBeta = false;
-        bool isNodeProject = false;
+        WebProjectOptions webProject = new WebProjectOptions();
         bool projectExists = File.Exists(projectFile);
         bool legacyExists = File.Exists(legacyMetaFile);
 
@@ -42,8 +40,7 @@ public class VersionService : IVersionService {
         string? fileToRead = projectExists ? projectFile : (legacyExists ? legacyMetaFile : null);
         if (fileToRead != null) {
             try {
-                string content = File.ReadAllText(fileToRead);
-                TomlTable model = Toml.ToModel(content);
+                TomlTable model = TomlSupport.ReadTable(fileToRead);
                 
                 if (model.ContainsKey("version") && !model.ContainsKey("patch")) {
                     patch = (long)model["version"];
@@ -53,60 +50,37 @@ public class VersionService : IVersionService {
                     if (model.ContainsKey("patch")) patch = (long)model["patch"];
                     if (model.ContainsKey("isAlpha")) isAlpha = (bool)model["isAlpha"];
                     if (model.ContainsKey("isBeta")) isBeta = (bool)model["isBeta"];
-                    if (model.ContainsKey("isNodeProject")) isNodeProject = (bool)model["isNodeProject"];
+                    if (model.ContainsKey("isNodeProject")) webProject = webProject with { IsNodeProject = (bool)model["isNodeProject"] };
+                    if (model.ContainsKey("isDenoProject")) webProject = webProject with { IsDenoProject = (bool)model["isDenoProject"] };
                 }
             } catch { /* Ignore corrupt, start from 0.0.0 */ }
         }
 
-        // 1b. Sync with package.json if needed
-        string packageJsonPath = Path.Combine(_repoPath, "package.json");
-        if (isNodeProject || ((!projectExists && !legacyExists) && File.Exists(packageJsonPath))) {
-             if (File.Exists(packageJsonPath)) {
-                try {
-                    string content = File.ReadAllText(packageJsonPath);
-                    JObject? json = JsonConvert.DeserializeObject<JObject>(content);
-                    JToken? versionToken = json?["version"];
-                    if (versionToken != null) {
-                        string v = versionToken.ToString();
-                        long pMajor = 0, pMinor = 0, pPatch = 0;
-                        bool pAlpha = false, pBeta = false;
+        // 1b. Sync with web project config files if needed.
+        IReadOnlyList<string> configPaths = WebProjectSupport.GetExistingConfigPaths(_repoPath);
+        if (configPaths.Count > 0) {
+            foreach (string configPath in configPaths) {
+                if (!WebProjectSupport.TryReadVersion(configPath, out long configMajor, out long configMinor, out long configPatch, out bool configAlpha, out bool configBeta)) {
+                    continue;
+                }
 
-                        // Handle suffixes
-                        if (v.EndsWith("-A")) {
-                            pAlpha = true;
-                            v = v.Substring(0, v.Length - 2);
-                        } else if (v.EndsWith("-B")) {
-                            pBeta = true;
-                            v = v.Substring(0, v.Length - 2);
-                        }
-                        
-                        string[] parts = v.Split('.');
-                        if (parts.Length >= 1) long.TryParse(parts[0], out pMajor);
-                        if (parts.Length >= 2) long.TryParse(parts[1], out pMinor);
-                        if (parts.Length >= 3) long.TryParse(parts[2], out pPatch);
-
-                        // Compare and take highest
-                        bool pkgIsHigher = false;
-                        if (pMajor > major) pkgIsHigher = true;
-                        else if (pMajor == major) {
-                            if (pMinor > minor) pkgIsHigher = true;
-                            else if (pMinor == minor) {
-                                if (pPatch > patch) pkgIsHigher = true;
-                            }
-                        }
-
-                        if (pkgIsHigher) {
-                            major = pMajor;
-                            minor = pMinor;
-                            patch = pPatch;
-                            isAlpha = pAlpha;
-                            isBeta = pBeta;
-                        }
-                    }
-                } catch { /* Ignore */ }
+                if (IsHigherVersion(configMajor, configMinor, configPatch, major, minor, patch)) {
+                    major = configMajor;
+                    minor = configMinor;
+                    patch = configPatch;
+                    isAlpha = configAlpha;
+                    isBeta = configBeta;
+                }
             }
         }
-        return (major, minor, patch, isAlpha, isBeta, isNodeProject);
+
+        WebProjectOptions detectedProject = WebProjectSupport.Detect(_repoPath);
+        webProject = webProject with {
+            IsNodeProject = webProject.IsNodeProject || detectedProject.IsNodeProject,
+            IsDenoProject = webProject.IsDenoProject || detectedProject.IsDenoProject
+        };
+
+        return (major, minor, patch, isAlpha, isBeta, webProject);
     }
 
     public string IncrementVersion(VersionChangeType changeType = VersionChangeType.Patch, string? manualVersion = null) {
@@ -114,13 +88,13 @@ public class VersionService : IVersionService {
         BetterGitConfigPaths.MigrateMetaTomlToProjectTomlIfNeeded(_repoPath);
         BetterGitConfigPaths.EnsureBetterGitDirExists(_repoPath);
 
-        (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, bool IsNodeProject) state = ReadCurrentVersionState();
+        (long Major, long Minor, long Patch, bool IsAlpha, bool IsBeta, WebProjectOptions WebProject) state = ReadCurrentVersionState();
         long major = state.Major;
         long minor = state.Minor;
         long patch = state.Patch;
         bool isAlpha = state.IsAlpha;
         bool isBeta = state.IsBeta;
-        bool isNodeProject = state.IsNodeProject;
+        WebProjectOptions webProject = state.WebProject;
 
         string projectFile = BetterGitConfigPaths.GetProjectTomlPath(_repoPath);
         TomlTable toml = ReadProjectTomlModel(projectFile);
@@ -163,27 +137,17 @@ public class VersionService : IVersionService {
         toml["patch"] = patch;
         toml["isAlpha"] = isAlpha;
         toml["isBeta"] = isBeta;
-        toml["isNodeProject"] = isNodeProject;
-        File.WriteAllText(projectFile, Toml.FromModel(toml));
+        toml["isNodeProject"] = webProject.IsNodeProject;
+        toml["isDenoProject"] = webProject.IsDenoProject;
+        File.WriteAllText(projectFile, TomlSupport.WriteTable(toml));
 
         string versionString = $"{major}.{minor}.{patch}";
         if (isAlpha) versionString += "-A";
         else if (isBeta) versionString += "-B";
 
-        // 4. Update package.json if exists (Preserving Formatting)
-        string pkgPath = Path.Combine(_repoPath, "package.json");
-        if (File.Exists(pkgPath)) {
-            try {
-                string content = File.ReadAllText(pkgPath);
-                // Regex to find "version": "..." and replace it, preserving whitespace
-                string pattern = "(\"version\"\\s*:\\s*\")(.*?)(\")";
-                Regex regex = new Regex(pattern);
-                
-                // Only replace the first occurrence
-                string newContent = regex.Replace(content, $"${{1}}{versionString}$3", 1);
-                
-                File.WriteAllText(pkgPath, newContent);
-            } catch { /* Ignore */ }
+        // 4. Update web project config files if they exist (Preserving Formatting)
+        foreach (string configPath in WebProjectSupport.GetExistingConfigPaths(_repoPath)) {
+            WebProjectSupport.UpdateVersionField(configPath, versionString);
         }
 
         return $"v{versionString}";
@@ -206,27 +170,37 @@ public class VersionService : IVersionService {
             toml["isBeta"] = true;
         }
 
-        File.WriteAllText(projectFile, Toml.FromModel(toml));
+        File.WriteAllText(projectFile, TomlSupport.WriteTable(toml));
         Console.WriteLine($"Channel set to: {channel}");
     }
 
     /* :: :: Methods :: END :: */
+
+    private static bool IsHigherVersion(long candidateMajor, long candidateMinor, long candidatePatch, long currentMajor, long currentMinor, long currentPatch) {
+        if (candidateMajor > currentMajor) {
+            return true;
+        }
+
+        if (candidateMajor < currentMajor) {
+            return false;
+        }
+
+        if (candidateMinor > currentMinor) {
+            return true;
+        }
+
+        if (candidateMinor < currentMinor) {
+            return false;
+        }
+
+        return candidatePatch > currentPatch;
+    }
 
     private static TomlTable ReadProjectTomlModel(string projectTomlPath) {
         if (!File.Exists(projectTomlPath)) {
             return new TomlTable();
         }
 
-        try {
-            string content = File.ReadAllText(projectTomlPath);
-            TomlTable model = Toml.ToModel(content);
-            TomlTable copy = new TomlTable();
-            foreach (KeyValuePair<string, object> kvp in model) {
-                copy[kvp.Key] = kvp.Value;
-            }
-            return copy;
-        } catch {
-            return new TomlTable();
-        }
+        return TomlSupport.ReadTable(projectTomlPath);
     }
 }

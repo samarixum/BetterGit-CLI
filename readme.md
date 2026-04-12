@@ -19,7 +19,7 @@ dotnet build
 ## Usage
 *   **Initialize:**
     ```pwsh
-    BetterGit.exe init "A:/Path/To/Project" [--node]
+    BetterGit.exe init "A:/Path/To/Project" [--node] [--deno]
     ```
 *   **Save Changes:**
     ```pwsh

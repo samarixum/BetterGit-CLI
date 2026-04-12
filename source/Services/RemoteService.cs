@@ -125,7 +125,7 @@ public sealed class RemoteService {
             entry["branch"] = branch;
         }
 
-        File.WriteAllText(projectFile, Toml.FromModel(model));
+        File.WriteAllText(projectFile, TomlSupport.WriteTable(model));
     }
 
     private sealed class RemoteMetadata {
@@ -259,16 +259,6 @@ public sealed class RemoteService {
             return new TomlTable();
         }
 
-        try {
-            string content = File.ReadAllText(projectTomlPath);
-            TomlTable model = Toml.ToModel(content);
-            TomlTable copy = new TomlTable();
-            foreach (KeyValuePair<string, object> kvp in model) {
-                copy[kvp.Key] = kvp.Value;
-            }
-            return copy;
-        } catch {
-            return new TomlTable();
-        }
+        return TomlSupport.ReadTable(projectTomlPath);
     }
 }

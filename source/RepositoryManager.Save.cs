@@ -70,12 +70,13 @@ public partial class RepositoryManager {
                     throw;
                 }
             }
-            if (File.Exists(Path.Combine(_repoPath, "package.json"))) {
+            foreach (string configPath in WebProjectSupport.GetExistingConfigPaths(_repoPath)) {
+                string fileName = Path.GetFileName(configPath);
                 try {
-                    Commands.Stage(repo, "package.json");
+                    Commands.Stage(repo, fileName);
                 } catch (Exception ex) {
                     if (IsPathTooLongError(ex)) {
-                        RunGitOrThrow(_repoPath, "add package.json");
+                        RunGitOrThrow(_repoPath, $"add {fileName}");
                     } else {
                         throw;
                     }

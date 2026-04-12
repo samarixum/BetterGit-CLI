@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks><!--net9.0;-->net10.0</TargetFrameworks>
+    <TargetFrameworks>net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -11,7 +11,7 @@
   <ItemGroup>
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="Tomlyn" Version="0.19.0" />
+    <PackageReference Include="Tomlyn" Version="2.3.0" />
   </ItemGroup>
 
 </Project>
