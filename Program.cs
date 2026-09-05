@@ -64,14 +64,13 @@ class Program {
                     break;
 
                 case "save":
-                    // usage: BetterGit.exe save "My commit message" [--major|--minor|--patch|--no-increment|--set-version <v>|--exclude-path <path>]
+                    // usage: BetterGit.exe save "My commit message" [--major|--minor|--patch|--no-increment|--set-version <v>]
                     if (args.Length < 2) {
                         throw new Exception("Message required.");
                     }
 
                     VersionChangeType changeType = VersionChangeType.Patch;
                     string? manualVersion = null;
-                    List<string> excludedPaths = new List<string>();
 
                     if (args.Contains("--major")) changeType = VersionChangeType.Major;
                     else if (args.Contains("--minor")) changeType = VersionChangeType.Minor;
@@ -83,13 +82,9 @@ class Program {
                             changeType = VersionChangeType.Manual;
                             manualVersion = args[i + 1];
                         }
-                        if (args[i] == "--exclude-path" && i + 1 < args.Length) {
-                            excludedPaths.Add(args[i + 1]);
-                            i++;
-                        }
                     }
 
-                    manager.Save(args[1], changeType, manualVersion, excludedPaths);
+                    manager.Save(args[1], changeType, manualVersion);
                     break;
 
                 case "undo":
@@ -284,6 +279,14 @@ class Program {
                     RepositoryManager.AddSafeDirectory(args[1]);
                     break;
 
+                case "convert-to-submodule":
+                    // usage: BetterGit.exe convert-to-submodule <relative-path> <url>
+                    if (args.Length < 3) {
+                        throw new Exception("Nested repository path and submodule URL are required.");
+                    }
+                    manager.ConvertNestedRepositoryToSubmodule(args[1], args[2]);
+                    break;
+
                 case "set-channel":
                     // usage: BetterGit.exe set-channel [alpha|beta|stable]
                     if (args.Length < 2) {
@@ -328,6 +331,7 @@ class Program {
         Console.WriteLine("  remote list [--json]   List Git remotes + metadata");
         Console.WriteLine("  remote add <name> <url> [--group <g>] [--provider <p>] [--branch <b>] [--public|--private]  Add a Git remote and metadata");
         Console.WriteLine("  remote set-meta <name> [--group <g>] [--provider <p>] [--branch <b>] [--public|--private]  Update metadata");
+        Console.WriteLine("  convert-to-submodule <path> <url>  Convert an existing nested repository into a submodule");
         Console.WriteLine("  -h, --help             Show this help message");
     }
 

@@ -7,89 +7,48 @@ public partial class RepositoryManager {
 
     // --- COMMAND: SAVE ---
     /// <summary>
-    /// Stages and commits the repository's changes, optionally leaving selected repository-relative paths unstaged.
+    /// Stages and commits parent repository changes while handling child repositories in the background.
     /// </summary>
     public void Save(
         string message,
         VersionChangeType changeType = VersionChangeType.Patch,
-        string? manualVersion = null,
-        IEnumerable<string>? excludedPaths = null
+        string? manualVersion = null
     ) {
         if (!IsValidGitRepo()) {
             throw new Exception("Not a valid BetterGit repository. Run 'init' first.");
         }
 
         using (Repository repo = new Repository(_repoPath)) {
-            StageChanges(excludedPaths);
+            List<(string path, string status)> changes = GetChangesSafe(repo, _repoPath, includeUntracked: true);
+            List<string> childRepositoryPaths = GetChangedChildRepositoryPaths(changes);
+            List<(string path, string status)> parentChanges = changes
+                .Where(change => !childRepositoryPaths.Contains(NormalizeRepositoryPath(change.path), StringComparer.OrdinalIgnoreCase))
+                .ToList();
 
-            // Excluded paths can leave the working tree dirty while the index has no included changes.
-            if (!HasStagedChanges(_repoPath)) {
-                Console.WriteLine("No included changes to save.");
+            if (parentChanges.Count == 0) {
+                Console.WriteLine("[INFO] No parent changes to save; child repository changes are handled independently.");
                 return;
             }
 
-            // Generate final message format
-            List<(string path, string status)> entries = GetChangesSafe(repo, _repoPath, includeUntracked: true);
-            System.Text.StringBuilder sb = new System.Text.StringBuilder();
-
-            if (string.IsNullOrWhiteSpace(message)) {
-                sb.AppendLine($"changes: {entries.Count}");
-            } else {
-                sb.AppendLine($"changes: {entries.Count}, {message}");
+            if (childRepositoryPaths.Count > 0) {
+                Console.WriteLine($"[INFO] Saving parent changes with {childRepositoryPaths.Count} child repository reference(s): {string.Join(", ", childRepositoryPaths)}");
             }
 
-            sb.AppendLine("Files changed in this commit:");
-
-            foreach ((string path, string status) entry in entries) {
-                string stateStr = "modified";
-                string s = entry.status;
-                if (s.Contains("New") || s.Contains("Added")) {
-                    stateStr = "added";
-                } else if (s.Contains("Deleted")) {
-                    stateStr = "deleted";
-                } else if (s.Contains("Renamed")) {
-                    stateStr = "renamed";
-                }
-
-                sb.AppendLine($"\t{stateStr}:   {entry.path}");
-            }
-            message = sb.ToString().TrimEnd();
-
-            // 3. Update Version
-            string version = _versionService.IncrementVersion(changeType, manualVersion);
-
-            // Stage the metadata files explicitly to be sure
+            string? version = null;
             try {
-                Commands.Stage(repo, ".betterGit/project.toml");
+                StageAllChanges();
+                CommitStagedChanges(repo, message, changeType, manualVersion, changes, ref version);
             } catch (Exception ex) {
-                if (IsPathTooLongError(ex)) {
-                    RunGitOrThrow(_repoPath, "add .betterGit/project.toml");
-                } else {
+                if (childRepositoryPaths.Count == 0) {
                     throw;
                 }
-            }
-            foreach (string configPath in WebProjectSupport.GetExistingConfigPaths(_repoPath)) {
-                string fileName = Path.GetFileName(configPath);
-                try {
-                    Commands.Stage(repo, fileName);
-                } catch (Exception ex) {
-                    if (IsPathTooLongError(ex)) {
-                        RunGitOrThrow(_repoPath, $"add {fileName}");
-                    } else {
-                        throw;
-                    }
-                }
-            }
 
-            // 4. Commit
-            Signature author = repo.Config.BuildSignature(DateTime.Now);
-            if (author == null) {
-                author = new Signature(name: "BetterGit User", email: "user@bettergit.local", when: DateTime.Now);
+                Console.WriteLine($"[INFO] Parent save including child repositories failed: {ex.Message}");
+                Console.WriteLine($"[INFO] Retrying parent save without child repositories: {string.Join(", ", childRepositoryPaths)}");
+                StageChangesExcluding(childRepositoryPaths);
+                CommitStagedChanges(repo, message, changeType, manualVersion, parentChanges, ref version);
+                Console.WriteLine("[INFO] Parent save retry completed without child repository references.");
             }
-
-            repo.Commit($"[{version}] {message}", author, author);
-
-            Console.WriteLine($"Saved successfully: [{version}] {message}");
         }
     }
 
@@ -97,57 +56,114 @@ public partial class RepositoryManager {
     // //
     /* :: :: Private Helpers :: START :: */
 
-    // Stages every change except explicitly excluded repository-relative paths, including gitlink entries.
-    private void StageChanges(IEnumerable<string>? excludedPaths) {
-        List<string> normalizedExcludedPaths = NormalizeExcludedPaths(excludedPaths);
-        if (normalizedExcludedPaths.Count == 0) {
-            RunGitOrThrow(_repoPath, new List<string> { "add", "-A" });
+    // Commits the current index and writes the version only after included parent changes have been staged.
+    private void CommitStagedChanges(
+        Repository repo,
+        string message,
+        VersionChangeType changeType,
+        string? manualVersion,
+        List<(string path, string status)> entries,
+        ref string? version
+    ) {
+        if (!HasStagedChanges(_repoPath)) {
+            Console.WriteLine("[INFO] No included parent changes were staged.");
             return;
         }
 
-        // First unstage selected paths so a gitlink that was staged before this save cannot be committed accidentally.
+        version ??= _versionService.IncrementVersion(changeType, manualVersion);
+        StageMetadataFiles();
+
+        string commitMessage = BuildCommitMessage(message, entries);
+        Signature author = repo.Config.BuildSignature(DateTime.Now);
+        if (author == null) {
+            author = new Signature(name: "BetterGit User", email: "user@bettergit.local", when: DateTime.Now);
+        }
+
+        repo.Commit($"[{version}] {commitMessage}", author, author);
+        Console.WriteLine($"Saved successfully: [{version}] {commitMessage}");
+    }
+
+    // Builds the human-readable commit summary from the paths included in the final commit attempt.
+    private static string BuildCommitMessage(string message, List<(string path, string status)> entries) {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+        if (string.IsNullOrWhiteSpace(message)) {
+            sb.AppendLine($"changes: {entries.Count}");
+        } else {
+            sb.AppendLine($"changes: {entries.Count}, {message}");
+        }
+
+        sb.AppendLine("Files changed in this commit:");
+
+        foreach ((string path, string status) entry in entries) {
+            string stateStr = "modified";
+            string s = entry.status;
+            if (s.Contains("New") || s.Contains("Added")) {
+                stateStr = "added";
+            } else if (s.Contains("Deleted")) {
+                stateStr = "deleted";
+            } else if (s.Contains("Renamed")) {
+                stateStr = "renamed";
+            }
+
+            sb.AppendLine($"\t{stateStr}:   {entry.path}");
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    // Stages version metadata with Git so staging follows the same robust path as child repository references.
+    private void StageMetadataFiles() {
+        List<string> metadataPaths = new List<string> { ".betterGit/project.toml" };
+        metadataPaths.AddRange(WebProjectSupport.GetExistingConfigPaths(_repoPath)
+            .Select(Path.GetFileName)
+            .Where(fileName => !string.IsNullOrWhiteSpace(fileName))
+            .Select(fileName => fileName!));
+
+        foreach (string metadataPath in metadataPaths.Distinct(StringComparer.OrdinalIgnoreCase)) {
+            RunGitOrThrow(_repoPath, new List<string> { "add", "--", metadataPath });
+        }
+    }
+
+    // Uses Git rather than LibGit2Sharp because Git reliably stages gitlinks and long working-tree paths.
+    private void StageAllChanges() {
+        RunGitOrThrow(_repoPath, new List<string> { "add", "-A" });
+    }
+
+    // Removes child repository paths from the index without altering their working trees, then stages all other paths.
+    private void StageChangesExcluding(List<string> childRepositoryPaths) {
         List<string> resetArguments = new List<string> { "reset", "HEAD", "--" };
-        resetArguments.AddRange(normalizedExcludedPaths);
+        resetArguments.AddRange(childRepositoryPaths);
         RunGitOrThrow(_repoPath, resetArguments);
 
         List<string> addArguments = new List<string> { "add", "-A", "--", "." };
-        foreach (string excludedPath in normalizedExcludedPaths) {
-            addArguments.Add($":(exclude){excludedPath}");
+        foreach (string childRepositoryPath in childRepositoryPaths) {
+            addArguments.Add($":(exclude){childRepositoryPath}");
         }
         RunGitOrThrow(_repoPath, addArguments);
     }
 
-    // Validates external CLI paths and converts them to Git's repository-relative separator style.
-    private List<string> NormalizeExcludedPaths(IEnumerable<string>? excludedPaths) {
-        List<string> normalizedPaths = new List<string>();
-        if (excludedPaths == null) {
-            return normalizedPaths;
-        }
-
-        string repositoryRoot = Path.GetFullPath(_repoPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        foreach (string excludedPath in excludedPaths) {
-            if (string.IsNullOrWhiteSpace(excludedPath) || Path.IsPathRooted(excludedPath)) {
-                throw new ArgumentException("Excluded paths must be non-empty repository-relative paths.");
+    // Finds changed nested repositories and submodules without treating ordinary directories as child repositories.
+    private List<string> GetChangedChildRepositoryPaths(List<(string path, string status)> changes) {
+        List<string> childPaths = new List<string>();
+        foreach ((string path, _) in changes) {
+            string normalizedPath = NormalizeRepositoryPath(path);
+            if (string.IsNullOrWhiteSpace(normalizedPath)) {
+                continue;
             }
 
-            string fullPath = Path.GetFullPath(Path.Combine(repositoryRoot, excludedPath));
-            string relativePath = Path.GetRelativePath(repositoryRoot, fullPath);
-            if (relativePath == ".." || relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) {
-                throw new ArgumentException("Excluded paths must remain inside the repository.");
-            }
-
-            string gitPath = relativePath
-                .Replace(Path.DirectorySeparatorChar, '/')
-                .Replace(Path.AltDirectorySeparatorChar, '/')
-                .TrimEnd('/');
-            if (!string.IsNullOrWhiteSpace(gitPath) && !normalizedPaths.Contains(gitPath, StringComparer.Ordinal)) {
-                normalizedPaths.Add(gitPath);
+            string targetPath = Path.Combine(_repoPath, normalizedPath);
+            string gitPath = Path.Combine(targetPath, ".git");
+            if (Directory.Exists(targetPath) && (Directory.Exists(gitPath) || File.Exists(gitPath))) {
+                childPaths.Add(normalizedPath);
             }
         }
 
-        return normalizedPaths;
+        return childPaths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    // Converts a Git status path into a consistent repository-relative pathspec.
+    private static string NormalizeRepositoryPath(string path) {
+        return path.Replace('\\', '/').Trim().TrimEnd('/');
     }
 
     // Checks the index instead of the working tree because excluded submodule paths intentionally remain dirty.
