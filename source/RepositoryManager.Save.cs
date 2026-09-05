@@ -6,27 +6,25 @@ public partial class RepositoryManager {
     /* :: :: Commands :: START :: */
 
     // --- COMMAND: SAVE ---
-    public void Save(string message, VersionChangeType changeType = VersionChangeType.Patch, string? manualVersion = null) {
+    /// <summary>
+    /// Stages and commits the repository's changes, optionally leaving selected repository-relative paths unstaged.
+    /// </summary>
+    public void Save(
+        string message,
+        VersionChangeType changeType = VersionChangeType.Patch,
+        string? manualVersion = null,
+        IEnumerable<string>? excludedPaths = null
+    ) {
         if (!IsValidGitRepo()) {
             throw new Exception("Not a valid BetterGit repository. Run 'init' first.");
         }
 
         using (Repository repo = new Repository(_repoPath)) {
-            // 1. Stage all changes (Automatic "git add -A")
-            // LibGit2Sharp can throw on Windows when long paths exist (often in untracked files).
-            try {
-                Commands.Stage(repo, "*");
-            } catch (Exception ex) {
-                if (ShouldFallbackToGitCli(ex)) {
-                    RunGitOrThrow(_repoPath, "add -A");
-                } else {
-                    throw;
-                }
-            }
+            StageChanges(excludedPaths);
 
-            // 2. Check if there is anything to commit
-            if (!IsRepoDirtySafe(repo, _repoPath)) {
-                Console.WriteLine("No changes to save.");
+            // Excluded paths can leave the working tree dirty while the index has no included changes.
+            if (!HasStagedChanges(_repoPath)) {
+                Console.WriteLine("No included changes to save.");
                 return;
             }
 
@@ -96,4 +94,74 @@ public partial class RepositoryManager {
     }
 
     /* :: :: Commands :: END :: */
+    // //
+    /* :: :: Private Helpers :: START :: */
+
+    // Stages every change except explicitly excluded repository-relative paths, including gitlink entries.
+    private void StageChanges(IEnumerable<string>? excludedPaths) {
+        List<string> normalizedExcludedPaths = NormalizeExcludedPaths(excludedPaths);
+        if (normalizedExcludedPaths.Count == 0) {
+            RunGitOrThrow(_repoPath, new List<string> { "add", "-A" });
+            return;
+        }
+
+        // First unstage selected paths so a gitlink that was staged before this save cannot be committed accidentally.
+        List<string> resetArguments = new List<string> { "reset", "HEAD", "--" };
+        resetArguments.AddRange(normalizedExcludedPaths);
+        RunGitOrThrow(_repoPath, resetArguments);
+
+        List<string> addArguments = new List<string> { "add", "-A", "--", "." };
+        foreach (string excludedPath in normalizedExcludedPaths) {
+            addArguments.Add($":(exclude){excludedPath}");
+        }
+        RunGitOrThrow(_repoPath, addArguments);
+    }
+
+    // Validates external CLI paths and converts them to Git's repository-relative separator style.
+    private List<string> NormalizeExcludedPaths(IEnumerable<string>? excludedPaths) {
+        List<string> normalizedPaths = new List<string>();
+        if (excludedPaths == null) {
+            return normalizedPaths;
+        }
+
+        string repositoryRoot = Path.GetFullPath(_repoPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        foreach (string excludedPath in excludedPaths) {
+            if (string.IsNullOrWhiteSpace(excludedPath) || Path.IsPathRooted(excludedPath)) {
+                throw new ArgumentException("Excluded paths must be non-empty repository-relative paths.");
+            }
+
+            string fullPath = Path.GetFullPath(Path.Combine(repositoryRoot, excludedPath));
+            string relativePath = Path.GetRelativePath(repositoryRoot, fullPath);
+            if (relativePath == ".." || relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) {
+                throw new ArgumentException("Excluded paths must remain inside the repository.");
+            }
+
+            string gitPath = relativePath
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/')
+                .TrimEnd('/');
+            if (!string.IsNullOrWhiteSpace(gitPath) && !normalizedPaths.Contains(gitPath, StringComparer.Ordinal)) {
+                normalizedPaths.Add(gitPath);
+            }
+        }
+
+        return normalizedPaths;
+    }
+
+    // Checks the index instead of the working tree because excluded submodule paths intentionally remain dirty.
+    private static bool HasStagedChanges(string repoPath) {
+        (int exitCode, string stderr) = RunGit(repoPath, new List<string> { "diff", "--cached", "--quiet" });
+        if (exitCode == 0) {
+            return false;
+        }
+        if (exitCode == 1) {
+            return true;
+        }
+
+        throw new Exception(string.IsNullOrWhiteSpace(stderr) ? "Failed to inspect staged changes." : stderr.Trim());
+    }
+
+    /* :: :: Private Helpers :: END :: */
 }

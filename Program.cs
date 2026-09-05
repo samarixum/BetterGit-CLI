@@ -64,13 +64,14 @@ class Program {
                     break;
 
                 case "save":
-                    // usage: BetterGit.exe save "My commit message" [--major|--minor|--patch|--no-increment|--set-version <v>]
+                    // usage: BetterGit.exe save "My commit message" [--major|--minor|--patch|--no-increment|--set-version <v>|--exclude-path <path>]
                     if (args.Length < 2) {
                         throw new Exception("Message required.");
                     }
 
                     VersionChangeType changeType = VersionChangeType.Patch;
                     string? manualVersion = null;
+                    List<string> excludedPaths = new List<string>();
 
                     if (args.Contains("--major")) changeType = VersionChangeType.Major;
                     else if (args.Contains("--minor")) changeType = VersionChangeType.Minor;
@@ -82,9 +83,13 @@ class Program {
                             changeType = VersionChangeType.Manual;
                             manualVersion = args[i + 1];
                         }
+                        if (args[i] == "--exclude-path" && i + 1 < args.Length) {
+                            excludedPaths.Add(args[i + 1]);
+                            i++;
+                        }
                     }
 
-                    manager.Save(args[1], changeType, manualVersion);
+                    manager.Save(args[1], changeType, manualVersion, excludedPaths);
                     break;
 
                 case "undo":

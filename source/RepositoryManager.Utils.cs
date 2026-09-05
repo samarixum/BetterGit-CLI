@@ -153,6 +153,14 @@ public partial class RepositoryManager {
         }
     }
 
+    // Runs Git with separately supplied arguments so repository paths are not interpreted by a shell.
+    private static void RunGitOrThrow(string repoPath, IEnumerable<string> arguments) {
+        (int exitCode, string stderr) = RunGit(repoPath, arguments);
+        if (exitCode != 0) {
+            throw new Exception(string.IsNullOrWhiteSpace(stderr) ? "git command failed." : stderr.Trim());
+        }
+    }
+
     /// <summary>
     /// Adds a safe.directory config for the specified path, which is necessary for git CLI operations to work on repos that are owned by other users (for example, when running BetterGit as admin
     /// but the repo is owned by a standard user). This is a static method because users may need to call it before the RepositoryManager instance can be initialized.
@@ -177,6 +185,31 @@ public partial class RepositoryManager {
             return (process.ExitCode, stdout, stderr);
         }
 
+    }
+
+    // Runs Git with an argument list to preserve exact path and pathspec values.
+    private static (int exitCode, string stderr) RunGit(string repoPath, IEnumerable<string> arguments) {
+        ProcessStartInfo psi = new ProcessStartInfo(fileName: "git") {
+            WorkingDirectory = repoPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        foreach (string argument in arguments) {
+            psi.ArgumentList.Add(argument);
+        }
+
+        Process? process = Process.Start(psi);
+        if (process == null) {
+            return (1, "Failed to start git process.");
+        }
+        using (process) {
+            string stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, stderr);
+        }
     }
 
     internal string ExtractVersion(string msg) {
