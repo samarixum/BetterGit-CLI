@@ -1,14 +1,15 @@
 using LibGit2Sharp;
 
-using System.Diagnostics;
-
 namespace BetterGit;
 
 public partial class RepositoryManager {
     /* :: :: Commands :: START :: */
 
     // --- COMMAND: PUBLISH ---
-    public void Publish(string? groupFilter = null, bool? publicFilter = null) {
+    /// <summary>
+    /// Pushes the current branch to configured remotes or establishes a selected remote as its upstream.
+    /// </summary>
+    public void Publish(string? groupFilter = null, bool? publicFilter = null, string? upstreamRemote = null) {
         if (!IsValidGitRepo()) {
             throw new Exception("Not a valid BetterGit repository. Run 'init' first.");
         }
@@ -41,6 +42,23 @@ public partial class RepositoryManager {
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(upstreamRemote)) {
+                RemoteInfo? selectedRemote = targets.FirstOrDefault(remote => remote.Name.Equals(upstreamRemote, StringComparison.OrdinalIgnoreCase));
+                if (selectedRemote == null) {
+                    throw new ArgumentException($"Remote '{upstreamRemote}' does not exist.", nameof(upstreamRemote));
+                }
+
+                string localBranchName = repo.Info.IsHeadDetached ? string.Empty : repo.Head.FriendlyName;
+                if (string.IsNullOrWhiteSpace(localBranchName)) {
+                    throw new InvalidOperationException("Cannot set an upstream while HEAD is detached.");
+                }
+
+                Console.WriteLine($"[INFO] Publishing '{localBranchName}' to {selectedRemote.Name} and setting its upstream.");
+                RunGitOrThrow(_repoPath, new List<string> { "push", "--set-upstream", selectedRemote.Name, localBranchName });
+                Console.WriteLine($"Successfully published to {selectedRemote.Name} and set the upstream branch.");
+                return;
+            }
+
             foreach (RemoteInfo remote in targets) {
                 Console.WriteLine($"Publishing to {remote.Name}...");
 
@@ -58,44 +76,14 @@ public partial class RepositoryManager {
                 arguments.Add(remote.Name);
                 arguments.Add(pushSpec);
 
-                ProcessStartInfo processInfo = new ProcessStartInfo(fileName: "git") {
-                    WorkingDirectory = _repoPath,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                foreach (string argument in arguments) {
-                    processInfo.ArgumentList.Add(argument);
+                (string stdout, string stderr) = RunGitOrThrowWithOutput(_repoPath, arguments);
+                if (!string.IsNullOrWhiteSpace(stdout)) {
+                    Console.WriteLine(stdout.Trim());
                 }
-
-                Process? process = Process.Start(processInfo);
-                if (process != null) {
-                    using (process) {
-                        process.OutputDataReceived += (_, eventArgs) => {
-                            if (!string.IsNullOrWhiteSpace(eventArgs.Data)) {
-                                Console.WriteLine(eventArgs.Data);
-                            }
-                        };
-
-                        process.ErrorDataReceived += (_, eventArgs) => {
-                            if (!string.IsNullOrWhiteSpace(eventArgs.Data)) {
-                                Console.Error.WriteLine(eventArgs.Data);
-                            }
-                        };
-
-                        process.BeginOutputReadLine();
-                        process.BeginErrorReadLine();
-                        process.WaitForExit();
-
-                        if (process.ExitCode == 0) {
-                            Console.WriteLine($"Successfully published to {remote.Name}.");
-                        } else {
-                            Console.Error.WriteLine($"Failed to publish to {remote.Name}.");
-                        }
-                    }
+                if (!string.IsNullOrWhiteSpace(stderr)) {
+                    Console.Error.WriteLine(stderr.Trim());
                 }
+                Console.WriteLine($"Successfully published to {remote.Name}.");
             }
         }
     }

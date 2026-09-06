@@ -127,9 +127,10 @@ class Program {
                     break;
 
                 case "publish":
-                    // usage: BetterGit.exe publish [--group <name>] [--public|--private]
+                    // usage: BetterGit.exe publish [--group <name>] [--public|--private] [--set-upstream <remote>]
                     string? publishGroup = null;
                     bool? publishPublic = null;
+                    string? publishUpstreamRemote = null;
 
                     for (int i = 1; i < args.Length; i++) {
                         if (args[i].Equals("--group", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length) {
@@ -145,9 +146,14 @@ class Program {
                             publishPublic = false;
                             continue;
                         }
+                        if (args[i].Equals("--set-upstream", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length) {
+                            publishUpstreamRemote = args[i + 1];
+                            i++;
+                            continue;
+                        }
                     }
 
-                    manager.Publish(publishGroup, publishPublic);
+                    manager.Publish(publishGroup, publishPublic, publishUpstreamRemote);
                     break;
 
                 case "remote":
@@ -308,6 +314,7 @@ class Program {
         } catch (Exception ex) {
             // We print errors to Standard Error so VS Code knows something failed
             Console.Error.WriteLine(ex.Message);
+            Environment.ExitCode = 1;
         }
     }
 

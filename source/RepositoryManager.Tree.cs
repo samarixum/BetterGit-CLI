@@ -33,6 +33,7 @@ public partial class RepositoryManager {
             int aheadBy = 0;
             int behindBy = 0;
             bool isPublishPending = false;
+            bool requiresUpstream;
             string? upstream = null;
 
             try {
@@ -47,6 +48,11 @@ public partial class RepositoryManager {
             } catch {
                 // ignore tracking failures
             }
+
+            bool hasRemotes = repo.Network.Remotes.Any();
+            bool hasCommits = repo.Head.Tip != null;
+            requiresUpstream = !hasUpstream && hasRemotes && hasCommits;
+            isPublishPending = isPublishPending || requiresUpstream;
 
             var timeline = repo.Commits
                                 .Take(20)
@@ -98,7 +104,8 @@ public partial class RepositoryManager {
                     upstream,
                     aheadBy,
                     behindBy,
-                    isPublishPending
+                    isPublishPending,
+                    requiresUpstream
                 }
             };
 

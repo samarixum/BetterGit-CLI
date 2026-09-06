@@ -161,6 +161,16 @@ public partial class RepositoryManager {
         }
     }
 
+    // Runs Git with an argument list and returns its output for commands that need to inspect a successful result.
+    private static (string stdout, string stderr) RunGitOrThrowWithOutput(string repoPath, IEnumerable<string> arguments) {
+        (int exitCode, string stdout, string stderr) = RunGitWithOutput(repoPath, arguments);
+        if (exitCode != 0) {
+            throw new Exception(string.IsNullOrWhiteSpace(stderr) ? "git command failed." : stderr.Trim());
+        }
+
+        return (stdout, stderr);
+    }
+
     /// <summary>
     /// Adds a safe.directory config for the specified path, which is necessary for git CLI operations to work on repos that are owned by other users (for example, when running BetterGit as admin
     /// but the repo is owned by a standard user). This is a static method because users may need to call it before the RepositoryManager instance can be initialized.
@@ -189,6 +199,12 @@ public partial class RepositoryManager {
 
     // Runs Git with an argument list to preserve exact path and pathspec values.
     private static (int exitCode, string stderr) RunGit(string repoPath, IEnumerable<string> arguments) {
+        (int exitCode, _, string stderr) = RunGitWithOutput(repoPath, arguments);
+        return (exitCode, stderr);
+    }
+
+    // Runs Git with an argument list to preserve exact path and pathspec values.
+    private static (int exitCode, string stdout, string stderr) RunGitWithOutput(string repoPath, IEnumerable<string> arguments) {
         ProcessStartInfo psi = new ProcessStartInfo(fileName: "git") {
             WorkingDirectory = repoPath,
             RedirectStandardOutput = true,
@@ -203,12 +219,13 @@ public partial class RepositoryManager {
 
         Process? process = Process.Start(psi);
         if (process == null) {
-            return (1, "Failed to start git process.");
+            return (1, string.Empty, "Failed to start git process.");
         }
         using (process) {
+            string stdout = process.StandardOutput.ReadToEnd();
             string stderr = process.StandardError.ReadToEnd();
             process.WaitForExit();
-            return (process.ExitCode, stderr);
+            return (process.ExitCode, stdout, stderr);
         }
     }
 

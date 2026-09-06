@@ -37,7 +37,7 @@ public partial class RepositoryManager {
             string? version = null;
             try {
                 StageAllChanges();
-                CommitStagedChanges(repo, message, changeType, manualVersion, changes, ref version);
+                CommitStagedChanges(message, changeType, manualVersion, changes, ref version);
             } catch (Exception ex) {
                 if (childRepositoryPaths.Count == 0) {
                     throw;
@@ -46,7 +46,7 @@ public partial class RepositoryManager {
                 Console.WriteLine($"[INFO] Parent save including child repositories failed: {ex.Message}");
                 Console.WriteLine($"[INFO] Retrying parent save without child repositories: {string.Join(", ", childRepositoryPaths)}");
                 StageChangesExcluding(childRepositoryPaths);
-                CommitStagedChanges(repo, message, changeType, manualVersion, parentChanges, ref version);
+                CommitStagedChanges(message, changeType, manualVersion, parentChanges, ref version);
                 Console.WriteLine("[INFO] Parent save retry completed without child repository references.");
             }
         }
@@ -58,7 +58,6 @@ public partial class RepositoryManager {
 
     // Commits the current index and writes the version only after included parent changes have been staged.
     private void CommitStagedChanges(
-        Repository repo,
         string message,
         VersionChangeType changeType,
         string? manualVersion,
@@ -74,12 +73,13 @@ public partial class RepositoryManager {
         StageMetadataFiles();
 
         string commitMessage = BuildCommitMessage(message, entries);
-        Signature author = repo.Config.BuildSignature(DateTime.Now);
-        if (author == null) {
-            author = new Signature(name: "BetterGit User", email: "user@bettergit.local", when: DateTime.Now);
+        List<string> commitArguments = new List<string>();
+        if (!HasGitCommitIdentity()) {
+            // Git's --author does not set committer identity, so both values must be supplied for this process.
+            commitArguments.AddRange(new[] { "-c", "user.name=BetterGit User", "-c", "user.email=user@bettergit.local" });
         }
-
-        repo.Commit($"[{version}] {commitMessage}", author, author);
+        commitArguments.AddRange(new[] { "commit", "-m", $"[{version}] {commitMessage}" });
+        RunGitOrThrowWithOutput(_repoPath, commitArguments);
         Console.WriteLine($"Saved successfully: [{version}] {commitMessage}");
     }
 
@@ -177,6 +177,12 @@ public partial class RepositoryManager {
         }
 
         throw new Exception(string.IsNullOrWhiteSpace(stderr) ? "Failed to inspect staged changes." : stderr.Trim());
+    }
+
+    // Uses Git's configured identity when available and retains BetterGit's fallback commit identity otherwise.
+    private bool HasGitCommitIdentity() {
+        (int exitCode, string stdout, _) = RunGitWithOutput(_repoPath, new List<string> { "var", "GIT_AUTHOR_IDENT" });
+        return exitCode == 0 && !string.IsNullOrWhiteSpace(stdout);
     }
 
     /* :: :: Private Helpers :: END :: */
