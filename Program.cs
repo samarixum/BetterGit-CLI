@@ -5,6 +5,21 @@ class Program {
     /* :: :: Entry Point :: START :: */
 
     static void Main(string[] args) {
+        // VS Code decodes redirected stdout and stderr as UTF-8. A legacy Windows code page
+        // can turn Unicode (for example an arrow) into raw control bytes after JSON escaping.
+        // OutputEncoding configures both output streams; omit the BOM for JSON consumers.
+        Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+        // Repair only this process before repository services or child Git processes use paths.
+        // Native libraries are published alongside the executable so this also runs with bad TMP.
+        try {
+            RuntimeEnvironment.Initialize();
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"Unable to initialize BetterGit environment: {ex.Message}");
+            Environment.ExitCode = 1;
+            return;
+        }
+
         if (args.Length == 0 || args[0] == "-h" || args[0] == "--help") {
             PrintHelp();
             return;

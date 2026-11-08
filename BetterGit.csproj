@@ -5,10 +5,13 @@
     <TargetFrameworks>net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Native libraries must remain beside the executable: bundle extraction runs before
+         C# can repair inherited TMP/TEMP values and can otherwise prevent startup entirely. -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Tomlyn" Version="2.3.0" />
